@@ -29,7 +29,10 @@ def get_gspread_client():
 def _cached_load(func_name, loader_func):
     now = time.time()
     if func_name not in _cache or now - _cache[func_name]['time'] > _CACHE_TTL:
+        print(f"[{datetime.datetime.now()}] DEBUG: Cache miss for {func_name} – reloading from Google Sheets")
         _cache[func_name] = {'data': loader_func(), 'time': now}
+    else:
+        print(f"[{datetime.datetime.now()}] DEBUG: Cache hit for {func_name}")
     return _cache[func_name]['data']
 
 def load_precincts():
@@ -69,6 +72,7 @@ def load_delegates():
                 'Strength': strength, 'Key': key,
                 'Display': f"{name} ({precinct}) – strength {strength}"
             }
+        print(f"[{datetime.datetime.now()}] DEBUG: Loaded {len(delegates)} seated delegates")
         return delegates
     return _cached_load('delegates', _load)
 
@@ -88,22 +92,31 @@ def get_votes():
     return _cached_load('votes', _load)
 
 def record_vote(poll_id, delegate_key, option):
+    print(f"[{datetime.datetime.now()}] DEBUG: record_vote called – poll={poll_id}, delegate_key={delegate_key}, option={option}")
     try:
         gc = get_gspread_client()
         votes_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
         current_votes = votes_sheet.get_all_records()
+        print(f"[{datetime.datetime.now()}] DEBUG: Read {len(current_votes)} existing votes from sheet")
 
         delegates = load_delegates()
         delegate = delegates.get(delegate_key)
         if not delegate:
+            print(f"[{datetime.datetime.now()}] DEBUG: Delegate key '{delegate_key}' not found")
             return False, "Delegate not found or not seated"
 
+        print(f"[{datetime.datetime.now()}] DEBUG: Found delegate: {delegate['Name']} (key={delegate_key})")
+
+        # Duplicate check
         existing = [v for v in current_votes
                     if str(v.get('PollID', '')) == str(poll_id)
                     and str(v.get('DelegateKey', '')) == str(delegate_key)]
         if existing:
+            print(f"[{datetime.datetime.now()}] DEBUG: Duplicate vote detected for this delegate")
             return False, f"❌ {delegate['Name']} has already voted on this poll"
 
+        # Record vote
+        print(f"[{datetime.datetime.now()}] DEBUG: Appending new vote row to Votes tab...")
         votes_sheet.append_row([
             len(current_votes) + 1,
             poll_id,
@@ -115,19 +128,20 @@ def record_vote(poll_id, delegate_key, option):
             datetime.datetime.now().isoformat(),
             delegate['Strength']
         ])
+        print(f"[{datetime.datetime.now()}] DEBUG: Vote successfully appended to Google Sheet")
 
         if 'votes' in _cache:
             del _cache['votes']
+            print(f"[{datetime.datetime.now()}] DEBUG: Votes cache cleared")
 
         return True, f"✅ Vote recorded for {delegate['Name']} – {option} (strength {delegate['Strength']})"
 
     except Exception as e:
         error_msg = f"❌ Vote failed: {str(e)}"
-        print("VOTE ERROR:", error_msg)
+        print(f"[{datetime.datetime.now()}] VOTE ERROR: {error_msg}")
         return False, error_msg
 
 def calculate_results(poll_id):
-    """Safer version – uses .get() so it never crashes on bad rows"""
     votes = get_votes()
     results = {}
     for v in votes:
@@ -140,6 +154,7 @@ def calculate_results(poll_id):
 # ====================== ROUTES ======================
 @app.route('/')
 def public_results():
+    print(f"[{datetime.datetime.now()}] DEBUG: Public results page loaded")
     polls = get_polls()
     active_polls = {pid: p for pid, p in polls.items() if p.get('Active')}
     results = {pid: calculate_results(pid) for pid in active_polls}
@@ -147,6 +162,8 @@ def public_results():
 
 @app.route('/vote', methods=['GET', 'POST'])
 def vote():
+    if request.method == 'POST':
+        print(f"[{datetime.datetime.now()}] DEBUG: POST to /vote – identifier={request.form.get('identifier')}")
     delegates = load_delegates()
     polls = {pid: p for pid, p in get_polls().items() if p.get('Active')}
     
@@ -176,6 +193,8 @@ def vote():
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
     if request.method == 'POST':
+        print(f"[{datetime.datetime.now()}] DEBUG: Admin login attempt")
+    if request.method == 'POST':
         if check_password_hash(ADMIN_PASSWORD_HASH, request.form.get('password')):
             session['admin'] = True
             return redirect(url_for('admin'))
@@ -193,6 +212,7 @@ def admin(action=None):
     votes = get_votes()
     
     if request.method == 'POST':
+        print(f"[{datetime.datetime.now()}] DEBUG: POST to admin – action={action}")
         gc = get_gspread_client()
         polls_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
         
