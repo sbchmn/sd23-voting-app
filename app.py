@@ -14,9 +14,9 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-productio
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 ADMIN_PASSWORD_HASH = generate_password_hash(os.environ.get('ADMIN_PASSWORD', 'change-me'))
 
-# Simple in-memory cache (10-second TTL)
+# 10-second in-memory cache
 _cache = {}
-_CACHE_TTL = 10  # seconds
+_CACHE_TTL = 10
 
 def get_gspread_client():
     creds_dict = json.loads(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
@@ -45,7 +45,6 @@ def load_delegates():
         gc = get_gspread_client()
         sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Delegates')
         records = sheet.get_all_records()
-        
         seated_count = defaultdict(int)
         delegate_list = []
         for r in records:
@@ -53,29 +52,21 @@ def load_delegates():
             if present in ['present', 'yes', '1', 'true', 'y']:
                 seated_count[str(r.get('Precinct', 'Unknown'))] += 1
                 delegate_list.append(r)
-        
         precincts = load_precincts()
-        
         delegates = {}
         for r in delegate_list:
             precinct = str(r.get('Precinct', 'Unknown'))
             allotted = precincts.get(precinct, 1)
             count = seated_count[precinct]
             strength = round(allotted / count, 4) if count > 0 else 1.0
-            
             first = r.get('First Name', '').strip()
             last = r.get('Last Name', '').strip()
             name = f"{first} {last}".strip()
             vuid = str(r.get('VUID', '')).strip()
-            
             key = vuid if vuid else f"{name} ({precinct})"
-            
             delegates[key] = {
-                'Name': name,
-                'Precinct': precinct,
-                'VUID': vuid,
-                'Strength': strength,
-                'Key': key,
+                'Name': name, 'Precinct': precinct, 'VUID': vuid,
+                'Strength': strength, 'Key': key,
                 'Display': f"{name} ({precinct}) – strength {strength}"
             }
         return delegates
@@ -98,7 +89,6 @@ def get_votes():
 
 def record_vote(poll_id, delegate_key, option):
     try:
-        # Force fresh read from Google Sheets (bypass cache for safety on manual votes)
         gc = get_gspread_client()
         votes_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
         current_votes = votes_sheet.get_all_records()
@@ -108,14 +98,12 @@ def record_vote(poll_id, delegate_key, option):
         if not delegate:
             return False, "Delegate not found or not seated"
 
-        # Strong duplicate check using fresh data
-        existing = [v for v in current_votes 
-                    if str(v.get('PollID', '')) == str(poll_id) 
+        existing = [v for v in current_votes
+                    if str(v.get('PollID', '')) == str(poll_id)
                     and str(v.get('DelegateKey', '')) == str(delegate_key)]
         if existing:
             return False, f"❌ {delegate['Name']} has already voted on this poll"
 
-        # Record the vote
         votes_sheet.append_row([
             len(current_votes) + 1,
             poll_id,
@@ -128,7 +116,6 @@ def record_vote(poll_id, delegate_key, option):
             delegate['Strength']
         ])
 
-        # Clear cache so public results update immediately
         if 'votes' in _cache:
             del _cache['votes']
 
@@ -136,20 +123,21 @@ def record_vote(poll_id, delegate_key, option):
 
     except Exception as e:
         error_msg = f"❌ Vote failed: {str(e)}"
-        print("VOTE ERROR:", error_msg)   # visible in DigitalOcean logs
+        print("VOTE ERROR:", error_msg)
         return False, error_msg
 
 def calculate_results(poll_id):
+    """Safer version – uses .get() so it never crashes on bad rows"""
     votes = get_votes()
     results = {}
     for v in votes:
-        if str(v['PollID']) == str(poll_id):
-            opt = v['OptionChosen']
-            results[opt] = results.get(opt, 0) + float(v.get('Strength', 0))
+        if str(v.get('PollID', '')) == str(poll_id):
+            opt = v.get('OptionChosen')
+            if opt:
+                results[opt] = results.get(opt, 0) + float(v.get('Strength', 0))
     return results
 
 # ====================== ROUTES ======================
-
 @app.route('/')
 def public_results():
     polls = get_polls()
@@ -169,9 +157,9 @@ def vote():
         
         delegate_key = None
         for k, d in delegates.items():
-            if (k.lower() == identifier.lower() or 
-                d['Name'].lower() == identifier.lower() or 
-                (d['VUID'] and d['VUID'].lower() == identifier.lower())):
+            if (k.lower() == identifier.lower() or
+                d['Name'].lower() == identifier.lower() or
+                (d.get('VUID') and d['VUID'].lower() == identifier.lower())):
                 delegate_key = k
                 break
         
@@ -233,7 +221,6 @@ def admin(action=None):
             success, msg = record_vote(poll_id, delegate_key, option)
             flash(msg, 'success' if success else 'warning')
         
-        # Critical: always redirect after POST so refresh is safe
         return redirect(url_for('admin'))
     
     return render_template('admin.html', polls=polls, votes=votes, delegates=delegates)
