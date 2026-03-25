@@ -81,7 +81,14 @@ def get_polls():
         gc = get_gspread_client()
         sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
         records = sheet.get_all_records()
-        return {str(r['PollID']): r for r in records if r.get('PollID')}
+        polls = {}
+        for r in records:
+            if not r.get('PollID'):
+                continue
+            active_val = str(r.get('Active', '')).strip().lower()
+            r['Active'] = active_val in ['true', '1', 'yes', 'y']   # force proper boolean
+            polls[str(r['PollID'])] = r
+        return polls
     return _cached_load('polls', _load)
 
 def get_votes():
@@ -207,7 +214,7 @@ def admin(action=None):
     if not session.get('admin'):
         return redirect(url_for('admin_login'))
     
-    # ← THIS IS THE FIX
+    # Handle both path and query string
     if action is None:
         action = request.args.get('action') or request.form.get('action')
     
@@ -231,11 +238,25 @@ def admin(action=None):
         elif action == 'toggle':
             poll_id = int(request.form['poll_id'])
             records = polls_sheet.get_all_records()
+            headers = polls_sheet.row_values(1)
+            active_col = headers.index('Active') + 1 if 'Active' in headers else 5
+            
             for i, row in enumerate(records):
-                if int(row['PollID']) == poll_id:
-                    new_active = not bool(row.get('Active'))
-                    polls_sheet.update_cell(i + 2, 5, new_active)
+                if str(row.get('PollID')) == str(poll_id):
+                    # ROBUST ACTIVE CHECK – treat as string
+                    active_val = str(row.get('Active', '')).strip().lower()
+                    is_currently_active = active_val in ['true', '1', 'yes', 'y']
+                    new_active = not is_currently_active
+                    
+                    polls_sheet.update_cell(i + 2, active_col, new_active)
+                    print(f"[{datetime.datetime.now()}] DEBUG: Toggled poll {poll_id} → {new_active} (sheet value was '{active_val}')")
                     break
+            
+            # Force cache clear so next page load sees the change
+            if 'polls' in _cache:
+                del _cache['polls']
+                print(f"[{datetime.datetime.now()}] DEBUG: Polls cache cleared after toggle")
+            
             flash('Poll toggled!', 'info')
         
         elif action == 'manual_vote':
