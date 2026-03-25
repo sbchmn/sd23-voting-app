@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import time
 from collections import defaultdict
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import gspread
@@ -13,6 +14,10 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-productio
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 ADMIN_PASSWORD_HASH = generate_password_hash(os.environ.get('ADMIN_PASSWORD', 'change-me'))
 
+# Simple in-memory cache (10-second TTL)
+_cache = {}
+_CACHE_TTL = 10  # seconds
+
 def get_gspread_client():
     creds_dict = json.loads(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
     creds = Credentials.from_service_account_info(
@@ -21,61 +26,75 @@ def get_gspread_client():
     )
     return gspread.authorize(creds)
 
+def _cached_load(func_name, loader_func):
+    now = time.time()
+    if func_name not in _cache or now - _cache[func_name]['time'] > _CACHE_TTL:
+        _cache[func_name] = {'data': loader_func(), 'time': now}
+    return _cache[func_name]['data']
+
 def load_precincts():
-    gc = get_gspread_client()
-    sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Precincts')
-    records = sheet.get_all_records()
-    return {str(r['Precinct']): int(r.get('Allotted', 1)) for r in records}
+    def _load():
+        gc = get_gspread_client()
+        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Precincts')
+        records = sheet.get_all_records()
+        return {str(r['Precinct']): int(r.get('Allotted', 1)) for r in records}
+    return _cached_load('precincts', _load)
 
 def load_delegates():
-    gc = get_gspread_client()
-    sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Delegates')
-    records = sheet.get_all_records()
-    
-    seated_count = defaultdict(int)
-    delegate_list = []
-    for r in records:
-        present = str(r.get('Present/Not Present', '')).strip().lower()
-        if present in ['present', 'yes', '1', 'true', 'y']:
-            seated_count[str(r.get('Precinct', 'Unknown'))] += 1
-            delegate_list.append(r)
-    
-    precincts = load_precincts()
-    
-    delegates = {}
-    for r in delegate_list:
-        precinct = str(r.get('Precinct', 'Unknown'))
-        allotted = precincts.get(precinct, 1)
-        count = seated_count[precinct]
-        strength = round(allotted / count, 4) if count > 0 else 1.0
+    def _load():
+        gc = get_gspread_client()
+        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Delegates')
+        records = sheet.get_all_records()
         
-        first = r.get('First Name', '').strip()
-        last = r.get('Last Name', '').strip()
-        name = f"{first} {last}".strip()
-        vuid = str(r.get('VUID', '')).strip()
+        seated_count = defaultdict(int)
+        delegate_list = []
+        for r in records:
+            present = str(r.get('Present/Not Present', '')).strip().lower()
+            if present in ['present', 'yes', '1', 'true', 'y']:
+                seated_count[str(r.get('Precinct', 'Unknown'))] += 1
+                delegate_list.append(r)
         
-        key = vuid if vuid else f"{name} ({precinct})"
+        precincts = load_precincts()
         
-        delegates[key] = {
-            'Name': name,
-            'Precinct': precinct,
-            'VUID': vuid,
-            'Strength': strength,
-            'Key': key,
-            'Display': f"{name} ({precinct}) – strength {strength}"
-        }
-    return delegates
+        delegates = {}
+        for r in delegate_list:
+            precinct = str(r.get('Precinct', 'Unknown'))
+            allotted = precincts.get(precinct, 1)
+            count = seated_count[precinct]
+            strength = round(allotted / count, 4) if count > 0 else 1.0
+            
+            first = r.get('First Name', '').strip()
+            last = r.get('Last Name', '').strip()
+            name = f"{first} {last}".strip()
+            vuid = str(r.get('VUID', '')).strip()
+            
+            key = vuid if vuid else f"{name} ({precinct})"
+            
+            delegates[key] = {
+                'Name': name,
+                'Precinct': precinct,
+                'VUID': vuid,
+                'Strength': strength,
+                'Key': key,
+                'Display': f"{name} ({precinct}) – strength {strength}"
+            }
+        return delegates
+    return _cached_load('delegates', _load)
 
 def get_polls():
-    gc = get_gspread_client()
-    sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
-    records = sheet.get_all_records()
-    return {str(r['PollID']): r for r in records if r.get('PollID')}
+    def _load():
+        gc = get_gspread_client()
+        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
+        records = sheet.get_all_records()
+        return {str(r['PollID']): r for r in records if r.get('PollID')}
+    return _cached_load('polls', _load)
 
 def get_votes():
-    gc = get_gspread_client()
-    sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
-    return sheet.get_all_records()
+    def _load():
+        gc = get_gspread_client()
+        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
+        return sheet.get_all_records()
+    return _cached_load('votes', _load)
 
 def record_vote(poll_id, delegate_key, option):
     delegates = load_delegates()
@@ -101,15 +120,21 @@ def record_vote(poll_id, delegate_key, option):
         datetime.datetime.now().isoformat(),
         delegate['Strength']
     ])
+    # Invalidate votes cache so next load picks up the new vote
+    if 'votes' in _cache:
+        del _cache['votes']
     return True, f"Vote recorded for {delegate['Name']} ({delegate['Precinct']})"
 
 def calculate_results(poll_id):
-    votes = [v for v in get_votes() if str(v['PollID']) == str(poll_id)]
+    votes = get_votes()
     results = {}
     for v in votes:
-        opt = v['OptionChosen']
-        results[opt] = results.get(opt, 0) + float(v.get('Strength', 0))
+        if str(v['PollID']) == str(poll_id):
+            opt = v['OptionChosen']
+            results[opt] = results.get(opt, 0) + float(v.get('Strength', 0))
     return results
+
+# ====================== ROUTES ======================
 
 @app.route('/')
 def public_results():
@@ -194,10 +219,8 @@ def admin(action=None):
             success, msg = record_vote(poll_id, delegate_key, option)
             flash(msg, 'success' if success else 'warning')
         
-        # ← THIS IS THE FIX: redirect after any POST
         return redirect(url_for('admin'))
     
-    # Only GET requests reach here (safe to refresh)
     return render_template('admin.html', polls=polls, votes=votes, delegates=delegates)
 
 @app.route('/admin/logout')
