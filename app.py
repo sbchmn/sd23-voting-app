@@ -207,12 +207,16 @@ def admin(action=None):
     if not session.get('admin'):
         return redirect(url_for('admin_login'))
     
+    # ← THIS IS THE FIX
+    if action is None:
+        action = request.args.get('action') or request.form.get('action')
+    
     delegates = load_delegates()
     polls = get_polls()
     votes = get_votes()
     
     if request.method == 'POST':
-        print(f"[{datetime.datetime.now()}] DEBUG: POST to admin – action={action}")
+        print(f"[{datetime.datetime.now()}] DEBUG: Admin POST - action={action}")
         gc = get_gspread_client()
         polls_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
         
