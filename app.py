@@ -98,22 +98,26 @@ def get_votes():
 
 def record_vote(poll_id, delegate_key, option):
     try:
+        # Force fresh read from Google Sheets (bypass cache for safety on manual votes)
+        gc = get_gspread_client()
+        votes_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
+        current_votes = votes_sheet.get_all_records()
+
         delegates = load_delegates()
         delegate = delegates.get(delegate_key)
         if not delegate:
             return False, "Delegate not found or not seated"
 
-        # Prevent double-voting
-        existing = [v for v in get_votes() 
-                    if str(v['PollID']) == str(poll_id) and v.get('DelegateKey') == delegate_key]
+        # Strong duplicate check using fresh data
+        existing = [v for v in current_votes 
+                    if str(v.get('PollID', '')) == str(poll_id) 
+                    and str(v.get('DelegateKey', '')) == str(delegate_key)]
         if existing:
-            return False, "This delegate has already voted on this poll"
+            return False, f"❌ {delegate['Name']} has already voted on this poll"
 
-        # Write to Google Sheets
-        gc = get_gspread_client()
-        votes_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
+        # Record the vote
         votes_sheet.append_row([
-            len(get_votes()) + 1,
+            len(current_votes) + 1,
             poll_id,
             delegate['Name'],
             delegate['Precinct'],
@@ -124,16 +128,15 @@ def record_vote(poll_id, delegate_key, option):
             delegate['Strength']
         ])
 
-        # Clear votes cache so next read shows the new vote
+        # Clear cache so public results update immediately
         if 'votes' in _cache:
             del _cache['votes']
 
-        return True, f"✅ Vote recorded for {delegate['Name']} (strength {delegate['Strength']})"
+        return True, f"✅ Vote recorded for {delegate['Name']} – {option} (strength {delegate['Strength']})"
 
     except Exception as e:
-        # This is the key part — we now catch and show the real error
         error_msg = f"❌ Vote failed: {str(e)}"
-        print("VOTE ERROR:", error_msg)  # also logs to DigitalOcean console
+        print("VOTE ERROR:", error_msg)   # visible in DigitalOcean logs
         return False, error_msg
 
 def calculate_results(poll_id):
@@ -230,6 +233,7 @@ def admin(action=None):
             success, msg = record_vote(poll_id, delegate_key, option)
             flash(msg, 'success' if success else 'warning')
         
+        # Critical: always redirect after POST so refresh is safe
         return redirect(url_for('admin'))
     
     return render_template('admin.html', polls=polls, votes=votes, delegates=delegates)
