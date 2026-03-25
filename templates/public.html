@@ -90,6 +90,8 @@
         {% endfor %}
     </script>
     
-    <p class="text-center text-muted mt-4">Auto-refreshes every 15 seconds • Last updated just now</p>
+    <p class="text-center text-muted">
+    Last updated: {{ now|default('just now') }} • Auto-refreshes every 60 seconds
+</p>
 </body>
 </html>

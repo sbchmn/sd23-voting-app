@@ -16,7 +16,7 @@ ADMIN_PASSWORD_HASH = generate_password_hash(os.environ.get('ADMIN_PASSWORD', 'c
 
 # 10-second in-memory cache
 _cache = {}
-_CACHE_TTL = 10
+_CACHE_TTL = 60
 
 def get_gspread_client():
     creds_dict = json.loads(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
@@ -130,9 +130,9 @@ def record_vote(poll_id, delegate_key, option):
         ])
         print(f"[{datetime.datetime.now()}] DEBUG: Vote successfully appended to Google Sheet")
 
-        if 'votes' in _cache:
-            del _cache['votes']
-            print(f"[{datetime.datetime.now()}] DEBUG: Votes cache cleared")
+       # if 'votes' in _cache:
+       #    del _cache['votes']
+       #     print(f"[{datetime.datetime.now()}] DEBUG: Votes cache cleared")
 
         return True, f"✅ Vote recorded for {delegate['Name']} – {option} (strength {delegate['Strength']})"
 
@@ -158,7 +158,7 @@ def public_results():
     polls = get_polls()
     active_polls = {pid: p for pid, p in polls.items() if p.get('Active')}
     results = {pid: calculate_results(pid) for pid in active_polls}
-    return render_template('public.html', polls=active_polls, results=results)
+    return render_template('public.html', polls=active_polls, results=results, now=datetime.datetime.now().strftime("%I:%M:%S %p"))
 
 @app.route('/vote', methods=['GET', 'POST'])
 def vote():
