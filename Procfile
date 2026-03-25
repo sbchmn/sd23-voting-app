@@ -1,1 +1,1 @@
-web: gunicorn --bind 0.0.0.0:${PORT:-8080} app:app
+web: gunicorn --worker-tmp-dir /dev/shm --bind 0.0.0.0:${PORT:-8080} app:app
