@@ -97,33 +97,44 @@ def get_votes():
     return _cached_load('votes', _load)
 
 def record_vote(poll_id, delegate_key, option):
-    delegates = load_delegates()
-    delegate = delegates.get(delegate_key)
-    if not delegate:
-        return False, "Delegate not found"
-    
-    existing = [v for v in get_votes() 
-                if str(v['PollID']) == str(poll_id) and v.get('DelegateKey') == delegate_key]
-    if existing:
-        return False, "Delegate has already voted on this poll"
-    
-    gc = get_gspread_client()
-    votes_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
-    votes_sheet.append_row([
-        len(get_votes()) + 1,
-        poll_id,
-        delegate['Name'],
-        delegate['Precinct'],
-        delegate['VUID'],
-        delegate_key,
-        option,
-        datetime.datetime.now().isoformat(),
-        delegate['Strength']
-    ])
-    # Invalidate votes cache so next load picks up the new vote
-    if 'votes' in _cache:
-        del _cache['votes']
-    return True, f"Vote recorded for {delegate['Name']} ({delegate['Precinct']})"
+    try:
+        delegates = load_delegates()
+        delegate = delegates.get(delegate_key)
+        if not delegate:
+            return False, "Delegate not found or not seated"
+
+        # Prevent double-voting
+        existing = [v for v in get_votes() 
+                    if str(v['PollID']) == str(poll_id) and v.get('DelegateKey') == delegate_key]
+        if existing:
+            return False, "This delegate has already voted on this poll"
+
+        # Write to Google Sheets
+        gc = get_gspread_client()
+        votes_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Votes')
+        votes_sheet.append_row([
+            len(get_votes()) + 1,
+            poll_id,
+            delegate['Name'],
+            delegate['Precinct'],
+            delegate['VUID'],
+            delegate_key,
+            option,
+            datetime.datetime.now().isoformat(),
+            delegate['Strength']
+        ])
+
+        # Clear votes cache so next read shows the new vote
+        if 'votes' in _cache:
+            del _cache['votes']
+
+        return True, f"✅ Vote recorded for {delegate['Name']} (strength {delegate['Strength']})"
+
+    except Exception as e:
+        # This is the key part — we now catch and show the real error
+        error_msg = f"❌ Vote failed: {str(e)}"
+        print("VOTE ERROR:", error_msg)  # also logs to DigitalOcean console
+        return False, error_msg
 
 def calculate_results(poll_id):
     votes = get_votes()
