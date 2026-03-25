@@ -69,7 +69,7 @@
             <table class="table table-sm table-striped">
                 <thead><tr><th>Delegate</th><th>Precinct</th><th>VUID</th><th>Vote</th><th>Strength</th><th>Time</th></tr></thead>
                 <tbody>
-                {% for v in votes if str(v.PollID) == str(pid) %}
+                {% for v in votes if (v.PollID|string) == (pid|string) %}
                 <tr>
                     <td>{{ v.DelegateName }}</td>
                     <td>{{ v.Precinct }}</td>
