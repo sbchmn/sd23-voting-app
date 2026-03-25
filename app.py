@@ -161,13 +161,14 @@ def admin(action=None):
     if not session.get('admin'):
         return redirect(url_for('admin_login'))
     
-    gc = get_gspread_client()
-    polls_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
     delegates = load_delegates()
     polls = get_polls()
     votes = get_votes()
     
     if request.method == 'POST':
+        gc = get_gspread_client()
+        polls_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet('Polls')
+        
         if action == 'create':
             title = request.form['title']
             desc = request.form.get('description', '')
@@ -184,6 +185,7 @@ def admin(action=None):
                     new_active = not bool(row.get('Active'))
                     polls_sheet.update_cell(i + 2, 5, new_active)
                     break
+            flash('Poll toggled!', 'info')
         
         elif action == 'manual_vote':
             poll_id = request.form['poll_id']
@@ -191,8 +193,11 @@ def admin(action=None):
             option = request.form['option']
             success, msg = record_vote(poll_id, delegate_key, option)
             flash(msg, 'success' if success else 'warning')
+        
+        # ← THIS IS THE FIX: redirect after any POST
+        return redirect(url_for('admin'))
     
-    polls = get_polls()
+    # Only GET requests reach here (safe to refresh)
     return render_template('admin.html', polls=polls, votes=votes, delegates=delegates)
 
 @app.route('/admin/logout')
