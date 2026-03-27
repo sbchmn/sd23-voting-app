@@ -66,7 +66,7 @@ def load_delegates():
             count = seated_count[precinct]
             
             # Original calculation you requested
-            strength = round(allotted / count, 4) if count > 0 else 1.0
+            strength = round(allotted / count, 4) if count > 0 else 0.0
             
             first = r.get('First Name', '').strip()
             last = r.get('Last Name', '').strip()
