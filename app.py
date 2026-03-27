@@ -59,40 +59,31 @@ def load_delegates():
         
         precincts = load_precincts()
         
-        # Group seated delegates by precinct for exact strength distribution
-        seated_by_precinct = defaultdict(list)
+        delegates = {}
         for r in delegate_list:
             precinct = str(r.get('Precinct', 'Unknown'))
-            seated_by_precinct[precinct].append(r)
-        
-        delegates = {}
-        for precinct, group in seated_by_precinct.items():
             allotted = precincts.get(precinct, 1)
-            count = len(group)
-            if count == 0:
-                continue
-            base = allotted // count
-            remainder = allotted % count
+            count = seated_count[precinct]
             
-            for i, r in enumerate(group):
-                strength = base + (1 if i < remainder else 0)
-                
-                first = r.get('First Name', '').strip()
-                last = r.get('Last Name', '').strip()
-                name = f"{first} {last}".strip()
-                vuid = str(r.get('VUID', '')).strip()
-                key = vuid if vuid else f"{name} ({precinct})"
-                
-                delegates[key] = {
-                    'Name': name,
-                    'Precinct': precinct,
-                    'VUID': vuid,
-                    'Strength': float(strength),   # keep as float for chart
-                    'Key': key,
-                    'Display': f"{name} ({precinct}) – strength {strength}"
-                }
+            # Original calculation you requested
+            strength = round(allotted / count, 4) if count > 0 else 1.0
+            
+            first = r.get('First Name', '').strip()
+            last = r.get('Last Name', '').strip()
+            name = f"{first} {last}".strip()
+            vuid = str(r.get('VUID', '')).strip()
+            key = vuid if vuid else f"{name} ({precinct})"
+            
+            delegates[key] = {
+                'Name': name,
+                'Precinct': precinct,
+                'VUID': vuid,
+                'Strength': strength,
+                'Key': key,
+                'Display': f"{name} ({precinct}) – strength {strength}"
+            }
         
-        print(f"[{datetime.datetime.now()}] DEBUG: Loaded {len(delegates)} seated delegates (exact precinct totals enforced)")
+        print(f"[{datetime.datetime.now()}] DEBUG: Loaded {len(delegates)} seated delegates")
         return delegates
     return _cached_load('delegates', _load)
 
